@@ -4,6 +4,8 @@ import datetime
 import random
 import time
 import urllib
+import json
+import requests
 
 import tornado.gen
 import tornado.escape
@@ -128,10 +130,15 @@ class ShopHandler(tornado.web.RequestHandler):
         items = yield bucket.get_multi(items.value['items'])
         self.render("www/shop.html", items=items)
 
+class SubmitNew(tornado.web.RequestHandler):
+    @tornado.gen.coroutine
+    def post(self):
+        self.set_status(200, 'OK')
 
 class SubmitHandler(tornado.web.RequestHandler):
     @tornado.gen.coroutine
     def post(self):
+
         data = tornado.escape.json_decode(self.request.body)
 
         # Someone has sent us an invalid order, send a 400
@@ -144,7 +151,28 @@ class SubmitHandler(tornado.web.RequestHandler):
                                      datetime.datetime.utcnow().isoformat())
         data['ts'] = int(time.time())
         data['type'] = "order"
-        yield bucket.upsert(key, data)
+
+        if not settings.ACID:
+            yield bucket.upsert(key, data)
+        else:
+            orderJson = tornado.escape.json_encode({key:data})
+
+            url = settings.RPC_ADDRESS
+
+            http_client = AsyncHTTPClient()
+            request = HTTPRequest(
+                url=url,
+                method='POST',
+                body=orderJson,
+                headers={'Content-Type': 'application/json'})
+            response = yield http_client.fetch(request)
+
+            if response.error:
+                response = response.error
+            else:
+                response = response.body
+            self.set_header('Content-Type', 'application/json')
+            self.finish(response)
 
 
 class SearchHandler(tornado.web.RequestHandler):
